@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "title": "FairyGUI Builder",
+    "description": "Inspect FairyGUI projects and assets, build UI components from a layout spec, render previews, and open the project in the FairyGUI editor."
+  },
+  "tools": {
+    "fairyui_inspect": "Inspect a FairyGUI project",
+    "fairyui_asset_sheet": "Render an asset contact sheet",
+    "fairyui_build": "Build a UI component",
+    "fairyui_open": "Open in FairyGUI editor"
+  }
+}

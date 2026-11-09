@@ -1,0 +1,28 @@
+{
+  "name": "dsh-fairyui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FairyGUI UI builder tools for DeepSeek Harness: inspect projects and assets, build components from a layout spec, render previews, open the editor.",
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "lib/*.js",
+    "lib/*.ps1",
+    "defaults/*.json",
+    "defaults/*.md",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

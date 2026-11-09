@@ -1,0 +1,12 @@
+{
+  "meta": {
+    "title": "FairyGUI 拼装器",
+    "description": "读取 FairyGUI 工程与资源，按布局规格生成界面元件、渲染预览图，并在 FairyGUI 编辑器中打开工程。"
+  },
+  "tools": {
+    "fairyui_inspect": "查看 FairyGUI 工程",
+    "fairyui_asset_sheet": "生成资源缩略图总览",
+    "fairyui_build": "按规格生成 UI 元件",
+    "fairyui_open": "在 FairyGUI 中打开工程"
+  }
+}
