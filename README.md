@@ -11,6 +11,11 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 | `fairyui_inspect` | 读取工程：包、图片（id/名称/尺寸/九宫格）、元件（id/名称/尺寸/**扩展类型**/`ui://` 地址/控制器/齿轮）、设计分辨率、现有规范；`details:true` 展开控制器与齿轮 |
 | `fairyui_asset_sheet` | 包内图片渲染成带标签的缩略图总览 PNG，便于按名称选素材 |
 | `fairyui_mockup_grid` | 给示意图叠加带刻度的坐标网格，便于量出精确的 `x/y/w/h` |
+| `fairyui_ocr` | Windows 自带 OCR：按 2× 分块识别文字、包围盒与字号估计（中/英） |
+| `fairyui_crop` | 示意图裁块/网格放大，解决整图缩放后看不清小字、图标的问题 |
+| `fairyui_annotate` | 把候选区域画成编号、带标签的框，先复核理解再开始拼 |
+| `fairyui_palette` | 采样主色/文字色 HEX 与占比，避免目测偏色 |
+| `fairyui_diff` | 预览 vs 示意图差异热力图，返回 `meanDiff`/`changedPct` |
 | `fairyui_guide` | 返回组件识别对照表、节点类型参考、规范文件格式 |
 | `fairyui_build` | 按 JSON 布局规格创建/替换元件，写 XML、出预览、返回 `ui://`；保留已有 `extention`，支持 `previewPages`、`indexChanged`、批量 `components` |
 | `fairyui_sync_views` | 按 XML 显示列表重生成 C# 视图类（`GetChildAt` 索引与发布一致） |
@@ -21,6 +26,31 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 | `fairyui_package_create` | 按规范新建空包（`assets/<包>/package.xml`） |
 | `fairyui_lint` | 扫描现有包/组件/图片，报告命名违规；支持 `folder`/`components` 聚焦 |
 | `fairyui_open` | 用 FairyGUI 编辑器打开工程 |
+
+## 识图增强：先裁、再标、后拼、用 diff 收口
+
+整张示意图进模型前会被缩放，小字、图标、细描边容易丢。推荐流程：
+
+1. `fairyui_crop`（grid 3×3，scale 2）→ `read_image` 逐块看细节，必要时对单块再裁一次；
+2. `fairyui_ocr` 拿文字内容、文字框 `rect` 与字号估计：默认把图切成 ≤800px 的块、每块放大 2× 识别（整图 2× 会漂移），坐标自动映射回原图；`lang` 可指定 `zh-Hans-CN`/`en-GB`，`scale:1` 关闭放大；
+3. `fairyui_annotate` 把识别出的区域（列表/按钮/文本/弹窗）画成编号框 → `read_image` 复核，防止漏判；
+4. `fairyui_palette` 取背景/强调色/文字色 HEX；
+5. `fairyui_build` 拼装；
+6. `fairyui_diff` 把预览与示意图叠差，`changedPct` 降不下去就继续调 `rect`/字号/颜色。
+
+OCR 说明：用的是 Windows 自带识别引擎（无需安装），默认 2× 分块（900×640 的图约 6 块），`fontSize` 由行高 ×1.1 估算，仅作参考；艺术字/描边字可能识别错（例如“钻石”识别成“钅占石”），文本务必用裁块图核对。
+
+```json
+// fairyui_annotate
+{ "image": "D:/UI/mockup.png", "regions": [
+  { "rect": [28, 20, 260, 56], "label": "标题" },
+  { "rect": [580, 420, 250, 110], "label": "按钮" }
+] }
+```
+
+- `fairyui_crop` 支持 `rect` 单块或 `cols`/`rows` 网格，输出到 `_crops` 目录；
+- `fairyui_diff` 会先把预览缩放到示意图尺寸再比，`changedPct` 是超过阈值（默认 24）的像素占比；
+- 颜色采样默认每 4 像素取一个点，`top` 控制返回数量；结果按图片位置写成 `<图名>_palette.json`。
 
 ## 组件识别：示意图元素 → FairyGUI 节点
 

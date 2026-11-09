@@ -48,6 +48,8 @@ import {
 } from './lib/conventions.js';
 import { checkViews, componentDetail, resolveComponentEntry, syncViews, viewDir } from './lib/views.js';
 import { parseNumbers, parseXml } from './lib/xml.js';
+import { annotateImage, cropImage, diffImages, paletteImage } from './lib/vision.js';
+import { ocrImage } from './lib/ocr.js';
 
 export const inject = ['tools'];
 
@@ -1627,6 +1629,177 @@ export function apply(ctx, config) {
         offset,
         nodes: nodes.map((node) => ({ name: node.name, type: node.type, design: node.design, mockup: node.mockup })),
       });
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_ocr',
+    description:
+      'Extract text lines from a mockup with bounding boxes and an approximate font size (Windows built-in OCR, zh-Hans/en). The image is upscaled 2x before recognition so small text survives; boxes are mapped back to source pixels. Use it to get exact copy and text-box rects before building. Stylized glyphs can be misread, so treat the text as a hint and confirm with fairyui_crop close-ups.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Absolute path to the mockup image.' },
+        lang: { type: 'string', description: 'OCR language tag, e.g. "zh-Hans-CN" or "en-GB" (default: user profile).' },
+        scale: { type: 'number', description: 'Upscale factor before OCR (default 2, 1 disables; max 4 / 4096px).' },
+        out: { type: 'string', description: 'Output JSON path (default <image>_ocr.json).' },
+      },
+      required: ['image'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => asText(value, value.ok ? `OCR: ${value.count} line(s) · ${value.lang}` : 'OCR failed'),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = resolveUserPath(args, exec, ctx, 'image');
+      const out = args.out ? resolveMaybeRelative(args.out, exec, ctx) : undefined;
+      return toJson(await ocrImage({ image, lang: args.lang, out, scale: args.scale }));
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_crop',
+    description:
+      'Crop or tile a mockup into zoomed PNGs so fine details survive the image downscaling that hides small text and icons. Grid mode (cols/rows) produces a set of close-ups; rect mode crops one region. Returns the file paths; open them with read_image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Absolute path to the mockup image.' },
+        rect: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Single crop [x, y, width, height]; omit to use grid mode.',
+        },
+        cols: { type: 'number', description: 'Grid columns (default 3, max 12).' },
+        rows: { type: 'number', description: 'Grid rows (default 3, max 12).' },
+        scale: { type: 'number', description: 'Zoom factor 1-4 (default 1).' },
+        outDir: { type: 'string', description: 'Output directory (default <image>_crops next to the image).' },
+        prefix: { type: 'string', description: 'File name prefix.' },
+      },
+      required: ['image'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => asText(value, value.ok ? `Crops: ${value.files.length} file(s) in ${value.dir}` : 'Crop failed'),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = resolveUserPath(args, exec, ctx, 'image');
+      const outDir = args.outDir ? resolveMaybeRelative(args.outDir, exec, ctx) : undefined;
+      return toJson(await cropImage({
+        image,
+        rect: Array.isArray(args.rect) ? args.rect : undefined,
+        cols: args.cols,
+        rows: args.rows,
+        scale: args.scale,
+        outDir,
+        prefix: args.prefix,
+      }));
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_annotate',
+    description:
+      'Draw numbered, labeled boxes for candidate regions on a mockup, so you can check your reading of the layout (what is a list, a button, text…) before building. regions: [{rect:[x,y,w,h], label?, color?}]. Returns the annotated PNG path; open it with read_image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Absolute path to the mockup image.' },
+        regions: {
+          type: 'array',
+          description: 'Regions to box.',
+          items: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {
+              rect: { type: 'array', items: { type: 'number' }, description: '[x, y, width, height]' },
+              label: { type: 'string' },
+              name: { type: 'string' },
+              color: { type: 'string', description: '#rrggbb (default #ff3b30).' },
+            },
+            required: ['rect'],
+          },
+        },
+        out: { type: 'string', description: 'Output PNG path (default <image>_annotated.png).' },
+        scale: { type: 'number', description: 'Output scale 1-2 (default 1).' },
+      },
+      required: ['image', 'regions'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => asText(value, value.ok ? `Annotated: ${value.path}` : 'Annotate failed'),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = resolveUserPath(args, exec, ctx, 'image');
+      const out = args.out ? resolveMaybeRelative(args.out, exec, ctx) : undefined;
+      return toJson(await annotateImage({ image, regions: args.regions, out, scale: args.scale }));
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_palette',
+    description:
+      'Sample the dominant colors of a mockup (whole image or one region) and return HEX values with percentages, so generated fills/text colors match instead of being guessed. Writes a JSON palette next to the image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Absolute path to the mockup image.' },
+        rect: { type: 'array', items: { type: 'number' }, description: 'Optional region [x, y, width, height].' },
+        top: { type: 'number', description: 'Number of colors (default 8, max 32).' },
+        step: { type: 'number', description: 'Pixel sampling step (default 4; larger is faster/coarser).' },
+      },
+      required: ['image'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => asText(value, value.ok ? `Palette: ${value.path}` : 'Palette failed'),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = resolveUserPath(args, exec, ctx, 'image');
+      return toJson(await paletteImage({
+        image,
+        rect: Array.isArray(args.rect) ? args.rect : undefined,
+        top: args.top,
+        step: args.step,
+      }));
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_diff',
+    description:
+      'Compare a generated preview against the mockup: renders a red heatmap (bright = bigger difference) and returns meanDiff, maxDiff and changedPct. Use it after fairyui_build to quantify what still differs instead of eyeballing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', description: 'Mockup image (reference).' },
+        preview: { type: 'string', description: 'Generated preview PNG.' },
+        out: { type: 'string', description: 'Heatmap path (default <image>_diff.png).' },
+        threshold: { type: 'number', description: 'Per-pixel difference threshold 0-255 (default 24).' },
+      },
+      required: ['image', 'preview'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) =>
+        asText(value, value.ok ? `Diff ${value.changedPct}% changed · mean ${value.meanDiff}` : 'Diff failed'),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const image = resolveUserPath(args, exec, ctx, 'image');
+      const preview = resolveMaybeRelative(args.preview, exec, ctx);
+      const out = args.out ? resolveMaybeRelative(args.out, exec, ctx) : undefined;
+      if (!fs.existsSync(preview)) throw new Error(`preview not found: ${preview}`);
+      return toJson(await diffImages({ image, preview, out, threshold: args.threshold }));
     },
   });
 }

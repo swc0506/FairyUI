@@ -1,12 +1,17 @@
 {
   "meta": {
     "title": "FairyGUI 拼装器",
-    "description": "读取 FairyGUI 工程与资源，按布局规格生成界面元件、渲染预览图，生成/校验 C# 视图类，并在 FairyGUI 编辑器中打开工程。"
+    "description": "读取 FairyGUI 工程与资源，按布局规格生成界面元件、渲染预览图，生成/校验 C# 视图类，并增强示意图识读（裁剪/标注/取色/差异对比）。"
   },
   "tools": {
     "fairyui_inspect": "查看 FairyGUI 工程",
     "fairyui_asset_sheet": "生成资源缩略图总览",
     "fairyui_mockup_grid": "给示意图叠加坐标网格",
+    "fairyui_ocr": "识别示意图文字与文字框",
+    "fairyui_crop": "裁剪/放大示意图局部",
+    "fairyui_annotate": "给示意图区域编号标注",
+    "fairyui_palette": "采集示意图主色",
+    "fairyui_diff": "对比预览与示意图差异",
     "fairyui_guide": "查看组件类型参考",
     "fairyui_build": "按规格生成 UI 元件",
     "fairyui_sync_views": "重生成 C# 视图类",
