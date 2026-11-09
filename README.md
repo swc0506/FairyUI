@@ -243,3 +243,8 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 - 自动生成的 ComboBox 弹出列表、窗口与树都是基础样式，实际项目可替换为美术模板；ScrollBar 不自动生成。
 - 需要 Windows（PowerShell + GDI+，FairyGUI 编辑器本身也是 Windows 程序）。
 - 发布（`.fui` 与图集）仍由 FairyGUI 编辑器完成。
+
+## License
+
+MIT © 2026 swc0506
+

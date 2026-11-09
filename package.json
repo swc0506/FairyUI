@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "FairyGUI UI builder tools for DeepSeek Harness: inspect projects and assets, build components from a layout spec with controller-page previews, generate and verify C# view classes, overlay layout boxes on mockups, open the editor.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swc0506/FairyUI.git"
+  },
+  "homepage": "https://github.com/swc0506/FairyUI",
+  "bugs": {
+    "url": "https://github.com/swc0506/FairyUI/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
