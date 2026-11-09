@@ -1,12 +1,21 @@
 {
   "meta": {
     "title": "FairyGUI Builder",
-    "description": "Inspect FairyGUI projects and assets, build UI components from a layout spec, render previews, and open the project in the FairyGUI editor."
+    "description": "Inspect FairyGUI projects and assets, build UI components from a layout spec, render previews, generate and verify C# view classes, and open the project in the FairyGUI editor."
   },
   "tools": {
     "fairyui_inspect": "Inspect a FairyGUI project",
     "fairyui_asset_sheet": "Render an asset contact sheet",
+    "fairyui_mockup_grid": "Overlay a coordinate grid on a mockup",
+    "fairyui_guide": "FairyGUI component guide",
     "fairyui_build": "Build a UI component",
+    "fairyui_sync_views": "Regenerate C# view classes",
+    "fairyui_check_views": "Check XML against view classes",
+    "fairyui_overlay": "Overlay component boxes on a mockup",
+    "fairyui_template": "Create an extension template",
+    "fairyui_conventions": "Read or save UI conventions",
+    "fairyui_package_create": "Create a FairyGUI package",
+    "fairyui_lint": "Lint naming conventions",
     "fairyui_open": "Open in FairyGUI editor"
   }
 }

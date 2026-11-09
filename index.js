@@ -21,7 +21,9 @@ import {
 } from './lib/project.js';
 import {
   compileLayout,
+  componentDisplayNames,
   componentInfo,
+  existingExtention,
   previewDir,
   writeComponent,
   writePreviewPlan,
@@ -34,14 +36,18 @@ import {
   checkNodeNames,
   conventionsFile,
   conventionsInfo,
+  defaultConventionsWarning,
   defaultsFile,
   lintPackages,
   loadConventions,
   matches,
   normalizeConventions,
   packageForComponent,
+  RESERVED_NODE_NAMES,
   saveConventions,
 } from './lib/conventions.js';
+import { checkViews, componentDetail, resolveComponentEntry, syncViews, viewDir } from './lib/views.js';
+import { parseNumbers, parseXml } from './lib/xml.js';
 
 export const inject = ['tools'];
 
@@ -128,7 +134,7 @@ const GUIDE_MARKDOWN = `# FairyGUI 组件识别与拼装参考
 - 大背景在“自定义数据”写 \`fill\`/\`fill0\`（只处理刘海屏位置）、\`fill1\`（等比缩放）、\`fill2\`（直接拉伸）；公共图集放 \`Common\`、\`Common1\`…（数字越小跨包引用越多）；超过 512x512 的大图不打图集，放 \`Assets/Res/UIImages\` 用 Loader；小图标按模块建 \`Dynamic\`+模块名 图集（如 \`DynamicItem\`）。
 - 代码生成：FGUI 发布到 \`Assets/Bundles/UIRes/UIPackage\` → Unity 菜单 \`FGUI → FGUI Tool\`（先 LoadUIResource，再 SpawnAllUIPageCode）→ 逻辑只写 \`*WindowLogic.cs\` 与 \`Func/*.cs\`；\`UIModule/Auto\` 每次整体重建，勿手改。
 
-- 查看当前生效规则：\`fairyui_conventions\`（action=show，返回 source: project | default）。
+- 查看当前生效规则：\`fairyui_conventions\`（action=show，返回 source: project | custom | bundled-default）。
 - 覆盖项目规范：\`fairyui_conventions\`（action=save，rules 只需写要覆盖的字段，sourceText 存原文）。
 - \`fairyui_build\` 校验组件名与节点名、按 \`packageRules\`/\`defaultPackage\` 选包（\`autoPrefixNodeNames=true\` 时给节点名加前缀）；\`fairyui_package_create\` 校验包名；\`fairyui_lint\` 扫描包/组件/图片命名违规。
 
@@ -139,6 +145,15 @@ const GUIDE_MARKDOWN = `# FairyGUI 组件识别与拼装参考
 3. 按上表把元素映射为 node；按钮/进度条/下拉框优先复用包内模板。
 4. \`fairyui_build\` 生成并出预览；read_image 对比示意图，修正 rect/字号/颜色后再 build。
 5. \`fairyui_open\` 在编辑器中复核；需要发布时在编辑器内发布。
+6. 覆盖已有组件后若返回 \`indexChanged\`，立即跑 \`fairyui_sync_views\` 重生成视图类，再 \`fairyui_check_views\` 确认一致。
+7. 想逐像素核对时用 \`fairyui_overlay\` 把组件框叠到示意图上。
+
+## 5. 视图类：生成与校验
+
+- \`fairyui_sync_views\`：按 XML 显示列表重生成 \`<工程>/../Code/Game/Scripts/UI/View/<包名>/<组件>.cs\`（utf-8-sig + CRLF）。保留名 \`icon/title/bar/bar_v/grip/ani/arrow1/arrow2\` 与匿名名 \`n1/n2\` 不生成字段但占索引；跨包实例输出 \`包名.类名\`；扩展类型映射 Label→GLabel、Button→GButton、ProgressBar→GProgressBar、Slider→GSlider、ComboBox→GComboBox。
+- \`fairyui_check_views\`：逐组件比对基类、字段集合、\`GetChildAt\` 索引、字段类型、\`GetControllerAt\` 索引，返回每条问题。
+- 两个工具都支持 \`components\` 数组与 \`codeRoot\` 覆盖输出目录；批量时单个失败不影响其它。
+- 预览控制器页：\`fairyui_build\` 传 \`previewPages:{stateCtrl:1}\`；跨包组件实例会在预览中合成展开（图片/文本/图形），无法解析时退回占位框。
 `;
 
 function asText(value, summary) {
@@ -191,6 +206,18 @@ function normalizeFolder(value) {
   return typeof value === 'string' ? value.trim().replace(/^\/+|\/+$/g, '') : '';
 }
 
+/** "components": [...] plus the single "component": "..." shorthand. */
+function componentRefs(args) {
+  const refs = [];
+  if (Array.isArray(args.components)) {
+    for (const value of args.components) {
+      if (typeof value === 'string' && value.trim() !== '') refs.push(value.trim());
+    }
+  }
+  if (typeof args.component === 'string' && args.component.trim() !== '') refs.push(args.component.trim());
+  return refs;
+}
+
 function openProject(args, exec, ctx) {
   const input = resolveUserPath(args, exec, ctx);
   const project = resolveProject(input);
@@ -209,12 +236,24 @@ function imageEntryInfo(pkg, entry) {
   };
 }
 
-function componentEntryInfo(pkg, entry) {
+function componentEntryInfo(pkg, entry, details = false) {
   let info = {};
   try {
     info = componentInfo(pkg, entry);
   } catch {
     info = {};
+  }
+  let extra = {};
+  if (details) {
+    try {
+      const detail = componentDetail(pkg, entry);
+      extra = {
+        controllers: detail.controllers,
+        gears: detail.gears,
+      };
+    } catch {
+      extra = {};
+    }
   }
   return {
     id: entryId(entry),
@@ -224,11 +263,12 @@ function componentEntryInfo(pkg, entry) {
     size: info.size,
     extention: info.extention,
     nodes: info.nodeCount,
+    ...extra,
     exported: entry.attrs.some(([k, v]) => k === 'exported' && v === 'true'),
   };
 }
 
-function packageSummary(pkg, { imageLimit = 120, includeImages = true } = {}) {
+function packageSummary(pkg, { imageLimit = 120, includeImages = true, details = false } = {}) {
   const images = pkg.entries.filter((e) => e.tag === 'image');
   const components = pkg.entries.filter((e) => e.tag === 'component');
   const fonts = pkg.entries.filter((e) => e.tag === 'font');
@@ -246,7 +286,7 @@ function packageSummary(pkg, { imageLimit = 120, includeImages = true } = {}) {
       fonts: fonts.length,
       other: others.length,
     },
-    components: components.map((e) => componentEntryInfo(pkg, e)),
+    components: components.map((e) => componentEntryInfo(pkg, e, details)),
     ...(includeImages ? { images: shown.map((e) => imageEntryInfo(pkg, e)) } : {}),
     ...(includeImages && images.length > shown.length ? { imagesTruncated: true } : {}),
   };
@@ -360,6 +400,7 @@ const nodeSchema = {
     indent: { type: 'number', description: 'Tree indent per level in pixels (default 15).' },
     rotation: { type: 'number' },
     alpha: { type: 'number' },
+    visible: { type: 'boolean', description: 'Node visibility (writes visible="false" when false).' },
     pivot: { type: 'string', description: 'Pivot, e.g. "0.5,0.5".' },
     allowOverflow: { type: 'boolean', description: 'Suppress the out-of-bounds warning.' },
     prompt: { type: 'string', description: 'Placeholder text (inputtext).' },
@@ -420,6 +461,10 @@ export function apply(ctx, config) {
           type: 'number',
           description: 'Maximum images listed per package (default 120, max 500).',
         },
+        details: {
+          type: 'boolean',
+          description: 'Also list each component controllers (name/pages/selected) and node gears (type/controller/target).',
+        },
       },
       required: ['project'],
       additionalProperties: false,
@@ -444,7 +489,7 @@ export function apply(ctx, config) {
           version: project.version,
           design: design || null,
         },
-        packages: wanted.map((pkg) => packageSummary(pkg, { imageLimit: limit })),
+        packages: wanted.map((pkg) => packageSummary(pkg, { imageLimit: limit, details: args.details === true })),
         conventions: conventions.rules
           ? {
               source: conventions.source,
@@ -597,6 +642,7 @@ export function apply(ctx, config) {
       'Components resolve inside the target package, or across packages with asset "Common1/CommonBtn" (the instance gets the src/fileName plus pkg of the source package); list defaultItem/tree templates accept the same form. ' +
       'When design/conventions.json or the bundled defaults apply, the component name, folder, package choice, node name pattern and export flag follow them; the component is written into the conventions componentFolder when one is configured (otherwise the package root), templates into templateFolder and imported images into imageFolder (both likewise default to the package root). ' +
       'Text nodes get autoClearText="true" and lists autoClearItems="true" by default (pass false to keep text/items on publish); node customData is written as the FairyGUI 自定义数据. ' +
+      'When the component already exists its extention is preserved; pass extention to change it ("none" removes it). previewPages:{controllerName:pageId} renders another controller state (gearDisplay/gearColor/gearIcon/gearXY/gearSize). Overwriting an existing component returns indexChanged and warns when GetChildAt indices moved. Batch mode: components:[name|{component,nodes,…}]. ' +
       'Returns the component file, its ui:// URL and the preview path (open the preview with read_image).',
     parameters: {
       type: 'object',
@@ -655,6 +701,33 @@ export function apply(ctx, config) {
           description:
             'Directory to search for images that are not in the package yet (also searches <project>/assets/<package>/images).',
         },
+        extention: {
+          type: 'string',
+          enum: ['Label', 'Button', 'ProgressBar', 'Slider', 'ComboBox', 'ScrollBar', 'none'],
+          description:
+            'Extension type written on the component root. Omit to keep the extention already on disk (new components get none); "none" removes it.',
+        },
+        previewPages: {
+          type: 'object',
+          additionalProperties: true,
+          description: 'Preview controller pages: {controllerName: pageId}; applies gearDisplay/gearColor/gearIcon/gearXY/gearSize.',
+        },
+        conventionsPath: {
+          type: 'string',
+          description: 'Conventions file to use instead of <project>/design/conventions.json (custom source).',
+        },
+        expectEmpty: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Node names whose empty text or missing loader url is expected (assigned at runtime); suppresses the info entry.',
+        },
+        components: {
+          type: 'array',
+          description:
+            'Batch mode: build several components in one call. Items are names (reusing the top-level nodes) or {component, nodes?, width?, height?, folder?, extention?, controllers?, scroll?, exported?}. Each result is independent; one failure does not stop the others.',
+          items: { anyOf: [{ type: 'string' }, { type: 'object', additionalProperties: true }] },
+        },
         background: {
           type: 'string',
           description: 'Preview background color (default #ffffffff).',
@@ -686,17 +759,39 @@ export function apply(ctx, config) {
     },
     isConcurrencySafe: () => false,
     async execute(args, exec) {
+      const batch = Array.isArray(args.components) ? args.components : null;
+      if (!batch) return toJson(await buildOne(args, exec));
+      const results = [];
+      for (const item of batch) {
+        const spec = typeof item === 'string' ? { component: item } : { ...(item || {}) };
+        try {
+          results.push(await buildOne({ ...args, ...spec, components: undefined }, exec));
+        } catch (error) {
+          results.push({ ok: false, component: spec.component, error: error.message });
+        }
+      }
+      return toJson({
+        ok: results.every((result) => result.ok),
+        count: results.length,
+        failed: results.filter((result) => !result.ok).map((result) => result.component),
+        results,
+      });
+    },
+  });
+
+  async function buildOne(args, exec) {
       const { project, packages } = openProject(args, exec, ctx);
       const name = String(args.component || '').trim();
       if (!name) throw new Error('component is required');
-      const rules = args.ignoreConventions === true ? null : loadConventions(project);
+      const conventions = args.ignoreConventions === true ? null : conventionsInfo(project, args.conventionsPath);
+      const rules = conventions?.rules || null;
       if (rules?.componentNamePattern && !matches(rules.componentNamePattern, name)) {
         throw new Error(
           `component name "${name}" violates the project convention ${rules.componentNamePattern} ` +
-            `(see ${conventionsFile(project)}); rename it or pass ignoreConventions: true`,
+            `(see ${conventions?.path || conventionsFile(project)}); rename it or pass ignoreConventions: true`,
         );
       }
-      const packageRef = args.package || (rules ? packageForComponent(project, packages, name) : undefined);
+      const packageRef = args.package || (rules ? packageForComponent(project, packages, name, undefined, rules) : undefined);
       const pkg = findPackage(packages, packageRef);
       const design = designResolution(project);
       const width = Math.max(1, Math.round(Number(args.width) || design?.width || DEFAULT_WIDTH));
@@ -741,9 +836,11 @@ export function apply(ctx, config) {
         allowOverflow: !!(args.scroll && args.scroll.overflow === 'scroll'),
         templateFolder,
         imageFolder,
+        previewPages: args.previewPages && typeof args.previewPages === 'object' ? args.previewPages : {},
+        expectEmpty: Array.isArray(args.expectEmpty) ? args.expectEmpty : [],
       });
       const exported = args.exported !== undefined ? args.exported : rules?.requireExported !== false;
-      const { entry, file } = writeComponent({
+      const written = writeComponent({
         project,
         pkg,
         name,
@@ -754,10 +851,33 @@ export function apply(ctx, config) {
         controllers: Array.isArray(args.controllers) ? args.controllers : [],
         scroll: args.scroll && typeof args.scroll === 'object' ? args.scroll : {},
         folder,
+        extention: args.extention,
       });
+      const { entry, file } = written;
       savePackage(pkg);
 
-      const warnings = [...compiled.warnings];
+      const warnings = [];
+      if (conventions?.source === 'bundled-default') {
+        warnings.push(defaultConventionsWarning(conventions.projectFile || conventionsFile(project)));
+      }
+      warnings.push(...compiled.warnings);
+      if (!written.extention) {
+        const reserved = nodes
+          .filter((node) => node && typeof node.name === 'string' && RESERVED_NODE_NAMES.has(node.name))
+          .map((node) => node.name);
+        if (reserved.length > 0) {
+          warnings.push(
+            `组件没有扩展类型（extention），保留名 ${[...new Set(reserved)].join(', ')} 不生效；` +
+              '需要 Label/Button 行为时传 extention',
+          );
+        }
+      }
+      const nextNames = componentDisplayNames(file);
+      const previous = new Map((written.previous || []).map((item) => [item.name, item.index]));
+      const indexChanged = nextNames
+        .filter((item) => !/^n\d+$/.test(item.name) && previous.has(item.name) && previous.get(item.name) !== item.index)
+        .map((item) => ({ name: item.name, from: previous.get(item.name), to: item.index }));
+      if (indexChanged.length > 0) warnings.push('节点索引已变化，请重新生成视图类（fairyui_sync_views）');
       for (const violation of nameViolations.slice(0, 10)) warnings.push(violation.message);
       for (const templateName of compiled.createdTemplates) {
         if (rules?.componentNamePattern && !matches(rules.componentNamePattern, templateName)) {
@@ -807,8 +927,11 @@ export function apply(ctx, config) {
             component: name,
             width,
             height,
+            extention: written.extention || null,
             controllers: args.controllers || [],
             scroll: args.scroll || {},
+            previewPages: args.previewPages || {},
+            conventionsPath: args.conventionsPath || null,
             nodes: args.nodes,
             importRoot,
           },
@@ -827,20 +950,24 @@ export function apply(ctx, config) {
           file,
           folder: folder ? `/${folder}/` : '/',
           size: [width, height],
+          extention: written.extention || null,
         },
         package: { name: pkg.name, id: pkg.id, dir: pkg.dir },
         preview,
+        conventions: conventions ? { source: conventions.source, path: conventions.path } : null,
+        indexChanged,
         imported: compiled.imported,
         createdTemplates: compiled.createdTemplates,
         warnings,
+        infos: compiled.infos,
         spec: specPath,
         next: [
           'Open preview with read_image and compare it with the mockup; adjust the spec and call fairyui_build again if needed.',
+          'If indexChanged is non-empty, run fairyui_sync_views for this component before building the game code.',
           'Call fairyui_open to inspect the component in the FairyGUI editor.',
         ],
       });
-    },
-  });
+  }
 
   ctx.tools.register({
     name: 'fairyui_open',
@@ -1214,6 +1341,19 @@ export function apply(ctx, config) {
       properties: {
         project: projectParam,
         package: { type: 'string', description: 'Only lint this package (default: all packages).' },
+        folder: {
+          type: 'string',
+          description: 'Only lint components/images in this package sub-folder, e.g. "Panels/Feed".',
+        },
+        components: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Only lint these component names (batch); each component is reported independently.',
+        },
+        conventionsPath: {
+          type: 'string',
+          description: 'Conventions file to use instead of <project>/design/conventions.json (custom source).',
+        },
       },
       required: ['project'],
       additionalProperties: false,
@@ -1226,18 +1366,266 @@ export function apply(ctx, config) {
     isConcurrencySafe: () => true,
     execute(args, exec) {
       const { project, packages } = openProject(args, exec, ctx);
-      const info = conventionsInfo(project);
+      const info = conventionsInfo(project, args.conventionsPath);
       if (!info.rules) {
         throw new Error(`no conventions found at ${conventionsFile(project)} or ${defaultsFile()}; save them with fairyui_conventions first`);
       }
       const wanted = args.package ? [findPackage(packages, args.package)] : packages;
-      const violations = lintPackages(project, wanted, info.rules);
+      const folder = typeof args.folder === 'string' ? args.folder : '';
+      const componentNames = Array.isArray(args.components) ? args.components : undefined;
+      const violations = lintPackages(project, wanted, info.rules, { folder, components: componentNames });
+      const warnings = [];
+      if (info.source === 'bundled-default') {
+        warnings.push(defaultConventionsWarning(info.projectFile || conventionsFile(project)));
+      }
+      const perComponent = componentNames
+        ? componentNames.map((component) => {
+            const name = String(component).replace(/\.xml$/i, '').toLowerCase();
+            const own = violations.filter((violation) => String(violation.name || '').toLowerCase() === name);
+            return { component, ok: own.length === 0, violations: own };
+          })
+        : undefined;
       return toJson({
         ok: true,
         source: info.source,
-        path: info.file,
+        path: info.path || info.file,
+        conventions: { source: info.source, path: info.path || info.file },
+        folder: folder || null,
         count: violations.length,
+        warnings,
+        ...(perComponent ? { items: perComponent } : {}),
         violations,
+      });
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_sync_views',
+    description:
+      'Regenerate the C# view classes (GComponent/GLabel/GButton…) from component XML, using display-list indices exactly like the FairyGUI publisher: reserved child names and anonymous n1/n2 names get no field but still occupy the index. Writes <project>/../Code/Game/Scripts/UI/View/<package>/<Component>.cs (utf-8-sig, CRLF) and returns the generated fields/controllers. Use it after fairyui_build reports indexChanged.',
+    parameters: {
+      type: 'object',
+      properties: {
+        project: projectParam,
+        package: { type: 'string', description: 'Package name/id that owns the components (required).' },
+        components: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Component XML paths relative to the package, e.g. "Panels/Feed/DigFeedPanel.xml" (name alone also works).',
+        },
+        component: { type: 'string', description: 'Single component (shorthand for components:[...]).' },
+        codeRoot: {
+          type: 'string',
+          description: 'Override the UI/View output root (default <project>/../Code/Game/Scripts/UI/View).',
+        },
+      },
+      required: ['project', 'package'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) =>
+        asText(value, value.ok ? `Generated ${value.written.length} view class(es)` : `Generated ${value.written.length}, failed ${value.failures.length}`),
+    },
+    isConcurrencySafe: () => false,
+    execute(args, exec) {
+      const { project, packages } = openProject(args, exec, ctx);
+      const pkg = findPackage(packages, args.package);
+      const refs = componentRefs(args);
+      if (refs.length === 0) throw new Error('components is required (e.g. ["Panels/Feed/DigFeedPanel.xml"])');
+      const codeRoot = typeof args.codeRoot === 'string' && args.codeRoot.trim() !== ''
+        ? resolveMaybeRelative(args.codeRoot, exec, ctx)
+        : undefined;
+      const result = syncViews({ project, pkg, packages, components: refs, codeRoot });
+      return toJson({
+        ok: result.failures.length === 0,
+        package: pkg.name,
+        outDir: result.outDir,
+        count: result.written.length,
+        written: result.written,
+        failures: result.failures,
+      });
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_check_views',
+    description:
+      'Check that each component XML still matches its generated C# view class: base class (extention), field set (custom non-reserved children), GetChildAt indices (anonymous nodes counted), field types and GetControllerAt indices. Returns ok plus per-component problems.',
+    parameters: {
+      type: 'object',
+      properties: {
+        project: projectParam,
+        package: { type: 'string', description: 'Package name/id that owns the components (required).' },
+        components: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Component XML paths relative to the package; omit to check every component in the package.',
+        },
+        component: { type: 'string', description: 'Single component (shorthand for components:[...]).' },
+        codeRoot: {
+          type: 'string',
+          description: 'Override the UI/View root (default <project>/../Code/Game/Scripts/UI/View).',
+        },
+      },
+      required: ['project', 'package'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) =>
+        asText(value, value.ok ? 'All view classes are consistent' : `${value.items.filter((item) => !item.ok).length} component(s) inconsistent`),
+    },
+    isConcurrencySafe: () => true,
+    execute(args, exec) {
+      const { project, packages } = openProject(args, exec, ctx);
+      const pkg = findPackage(packages, args.package);
+      let refs = componentRefs(args);
+      if (refs.length === 0) {
+        refs = pkg.entries
+          .filter((entry) => entry.tag === 'component')
+          .map((entry) => {
+            const folder = (entry.attrs.find(([k]) => k === 'path') || [])[1] || '/';
+            return `${folder.replace(/^\/+|\/+$/g, '')}${folder === '/' ? '' : '/'}${entry.name}`;
+          });
+      }
+      const root = typeof args.codeRoot === 'string' && args.codeRoot.trim() !== ''
+        ? resolveMaybeRelative(args.codeRoot, exec, ctx)
+        : undefined;
+      const result = checkViews({ project, pkg, packages, components: refs, codeRoot: root });
+      return toJson({
+        ok: result.ok,
+        package: pkg.name,
+        dir: result.dir,
+        total: result.items.length,
+        failed: result.items.filter((item) => !item.ok).length,
+        items: result.items,
+      });
+    },
+  });
+
+  ctx.tools.register({
+    name: 'fairyui_overlay',
+    description:
+      'Draw a component XML display list (colored node boxes) over a mockup image so box positions and element sizes can be compared pixel by pixel. Colours: component red, image cyan, loader yellow, text green, list magenta, graph gray. Returns the PNG path and the design/on-mockup rectangles.',
+    parameters: {
+      type: 'object',
+      properties: {
+        component: {
+          type: 'string',
+          description: 'Absolute component XML path, or a package-relative path/name when project+package are given.',
+        },
+        mockup: { type: 'string', description: 'Absolute path to the mockup image.' },
+        project: projectParam,
+        package: { type: 'string', description: 'Package name/id (only needed with a relative component).' },
+        out: { type: 'string', description: 'Output PNG path (default <mockup dir>/<component>-overlay.png).' },
+        offset: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Component origin on the mockup, [x, y] (default [0, 0]).',
+        },
+        zoom: { type: 'number', description: 'Output zoom (default 1, 1-4).' },
+        crop: {
+          type: 'array',
+          items: { type: 'number' },
+          description: 'Crop after drawing, [x0, y0, x1, y1] in mockup pixels.',
+        },
+      },
+      required: ['component', 'mockup'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render: (_args, value) => asText(value, `Overlay: ${value.path}`),
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const mockup = resolveUserPath(args, exec, ctx, 'mockup');
+      if (!fs.existsSync(mockup)) throw new Error(`mockup not found: ${mockup}`);
+      const raw = String(args.component || '').trim();
+      if (!raw) throw new Error('component is required');
+      let compFile = raw;
+      if (!path.isAbsolute(raw) || !fs.existsSync(raw)) {
+        if (!args.project) throw new Error('pass an absolute component XML path, or project + package with a component name');
+        const opened = openProject({ project: args.project }, exec, ctx);
+        const pkg = findPackage(opened.packages, args.package);
+        const entry = resolveComponentEntry(pkg, raw);
+        compFile = resourceFile(pkg, entry);
+      }
+      const root = parseXml(fs.readFileSync(compFile, 'utf8'));
+      if (!root) throw new Error(`cannot parse component XML: ${compFile}`);
+      const size = parseNumbers(root.attrs.size) || [0, 0];
+      const offset = Array.isArray(args.offset) && args.offset.length === 2
+        ? args.offset.map((value) => Number(value) || 0)
+        : [0, 0];
+      const zoom = Math.max(1, Math.min(4, Number(args.zoom) || 1));
+      const crop = Array.isArray(args.crop) && args.crop.length === 4
+        ? args.crop.map((value) => Math.round(Number(value) || 0))
+        : undefined;
+      const colors = {
+        component: '#ff0000',
+        image: '#00ffff',
+        loader: '#ffff00',
+        text: '#00ff00',
+        richtext: '#00c800',
+        inputtext: '#00c800',
+        list: '#ff00ff',
+        graph: '#a0a0a0',
+        group: '#c8c8c8',
+      };
+      const list = root.children.find((child) => child.tag === 'displayList');
+      const nodes = (list ? list.children : [])
+        .filter((node) => node.attrs.xy !== undefined)
+        .map((node) => {
+          const xy = parseNumbers(node.attrs.xy) || [0, 0];
+          const wh = parseNumbers(node.attrs.size) || [0, 0];
+          return {
+            name: node.attrs.name || '',
+            type: node.tag,
+            design: [xy[0], xy[1], wh[0], wh[1]],
+            mockup: [xy[0] + offset[0], xy[1] + offset[1], wh[0], wh[1]],
+          };
+        });
+      const ext = path.extname(mockup);
+      const out = typeof args.out === 'string' && args.out.trim() !== ''
+        ? resolveMaybeRelative(args.out, exec, ctx)
+        : path.join(path.dirname(mockup), `${path.basename(compFile, '.xml')}-overlay.png`);
+      const planPath = `${out}.plan.json`;
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(
+        planPath,
+        JSON.stringify(
+          {
+            mockup,
+            out,
+            width: size[0],
+            height: size[1],
+            offset,
+            zoom,
+            crop,
+            nodes: nodes.map((node) => ({
+              x: node.design[0],
+              y: node.design[1],
+              w: node.design[2],
+              h: node.design[3],
+              color: colors[node.type] || '#ffffff',
+            })),
+          },
+          null,
+          2,
+        ),
+        'utf8',
+      );
+      await renderWith(scriptPath('overlay.ps1'), planPath, out);
+      return toJson({
+        ok: true,
+        component: compFile,
+        mockup,
+        path: out,
+        zoom,
+        crop: crop || null,
+        offset,
+        nodes: nodes.map((node) => ({ name: node.name, type: node.type, design: node.design, mockup: node.mockup })),
       });
     },
   });

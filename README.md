@@ -8,15 +8,18 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 
 | 工具 | 用途 |
 | --- | --- |
-| `fairyui_inspect` | 读取工程：包、图片（id/名称/尺寸/九宫格）、元件（id/名称/尺寸/**扩展类型**/`ui://` 地址）、设计分辨率、现有规范 |
+| `fairyui_inspect` | 读取工程：包、图片（id/名称/尺寸/九宫格）、元件（id/名称/尺寸/**扩展类型**/`ui://` 地址/控制器/齿轮）、设计分辨率、现有规范；`details:true` 展开控制器与齿轮 |
 | `fairyui_asset_sheet` | 包内图片渲染成带标签的缩略图总览 PNG，便于按名称选素材 |
 | `fairyui_mockup_grid` | 给示意图叠加带刻度的坐标网格，便于量出精确的 `x/y/w/h` |
 | `fairyui_guide` | 返回组件识别对照表、节点类型参考、规范文件格式 |
-| `fairyui_build` | 按 JSON 布局规格创建/替换元件，写 XML、出预览、返回 `ui://` |
+| `fairyui_build` | 按 JSON 布局规格创建/替换元件，写 XML、出预览、返回 `ui://`；保留已有 `extention`，支持 `previewPages`、`indexChanged`、批量 `components` |
+| `fairyui_sync_views` | 按 XML 显示列表重生成 C# 视图类（`GetChildAt` 索引与发布一致） |
+| `fairyui_check_views` | 校验 XML ↔ 视图类：基类、字段集合、`GetChildAt`/`GetControllerAt` 索引、字段类型 |
+| `fairyui_overlay` | 把组件框叠到示意图上，逐像素核对位置与尺寸 |
 | `fairyui_template` | 创建扩展组件模板（Button/Label/ProgressBar/Slider/ComboBox/Tree/WindowFrame）或列表项模板 |
 | `fairyui_conventions` | 读取/保存规范（默认 `defaults/conventions.json`，项目 `design/conventions.json` 可覆盖） |
 | `fairyui_package_create` | 按规范新建空包（`assets/<包>/package.xml`） |
-| `fairyui_lint` | 扫描现有包/组件/图片，报告命名违规 |
+| `fairyui_lint` | 扫描现有包/组件/图片，报告命名违规；支持 `folder`/`components` 聚焦 |
 | `fairyui_open` | 用 FairyGUI 编辑器打开工程 |
 
 ## 组件识别：示意图元素 → FairyGUI 节点
@@ -113,7 +116,26 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 - `list` 的 `layout` 可取 `row`/`flow_hz`/`flow_vt`/`pagination`，省略为单列；`defaultItem` 也接受 `ui://`。
 - `button` 未指定 `asset` 时自动找包里第一个 Button 扩展组件；没有则报错并提示先在编辑器里建模板。
 - 跨包引用元件：`asset` 写 `包名/元件名`（如 `Common1/CommonBtn`），实例自动带 `src`、`fileName` 和源包 `pkg`；`list` 的 `defaultItem`、`tree` 模板同样支持。不写包名时只在目标包内查找。
+- `extention`：给组件根节点写扩展类型（`Label`/`Button`/`ProgressBar`/`Slider`/`ComboBox`/`ScrollBar`/`none`）。**省略时保留磁盘上已有的 `extention`**，新建组件为无扩展；传 `none` 移除。spec 里出现保留名（`icon`/`title`/`bar` 等）但组件没有扩展类型时会给出 warning。
+- `previewPages`：`{控制器名: 页id}`，预览按指定页应用 `gearDisplay`/`gearColor`/`gearIcon`/`gearXY`/`gearSize`，多态组件能看到非默认态。
+- 覆盖已有组件时返回 `indexChanged:[{name, from, to}]`（匿名 `n1`/`n2` 不计入），并 warning 提示重跑 `fairyui_sync_views`。
+- 批量：`components:[名称 | {component, nodes, width, height, folder, extention, controllers, scroll, exported}]`，每项独立返回，单项失败不中断其它。
+- `infos`：`loader has no url`、`text is empty` 属于运行时赋值，不再算 warning，统一放进 `infos`；传 `expectEmpty:["节点名"]` 可完全静默。
 - `richtext` 的预览只显示纯文本（标记会被剥离），最终渲染以编辑器为准。
+
+## 视图类：生成与校验
+
+`fairyui_sync_views` 按组件 XML 的显示列表重生成 C# 视图类，规则与 FairyGUI 发布器一致：
+
+1. 基类：`Label→GLabel`、`Button→GButton`、`ProgressBar→GProgressBar`、`Slider→GSlider`、`ComboBox→GComboBox`、无→`GComponent`；
+2. 保留名 `icon`/`title`/`bar`/`bar_v`/`grip`/`ani`/`arrow1`/`arrow2` 不生成字段；
+3. 匿名名（`^n\d+$`，如 `n1`、`n15`）不生成字段但**占显示索引**；
+4. 组件实例：本包用 `fileName` 的类名；跨包（`pkg` 属性是包 id）先查各包 `package.xml` 换成包名，输出 `Common1.CommonBtn`；
+5. `URL = ui://<包id><元件id>`，`PATH = "<包名>/<元件名>"`；
+6. 控制器按出现顺序 `GetControllerAt(i)`；
+7. 文件为 `utf-8-sig` + `CRLF`，输出到 `<工程>/../Code/Game/Scripts/UI/View/<包名>/`（`codeRoot` 可覆盖）。
+
+`fairyui_check_views` 反向比对 XML 与 `.cs`：基类、字段集合（多/少都报）、`GetChildAt` 索引、字段类型、`GetControllerAt` 索引；省略 `components` 时检查整包。两个工具都支持 `components` 数组，批量时逐组件返回结果。
 
 ## 命名与包管理规范
 
@@ -135,10 +157,12 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 
 - 结构化字段：`componentNamePattern`、`packageNamePattern`、`imageNamePattern`、`nodeNamePattern`、`defaultPackage`、`packageRules`（按组件名选包）、`componentFolder`/`templateFolder`/`imageFolder`（写入目录，本规范不设置 = 写包根）、`nodeNamePrefixes` + `autoPrefixNodeNames`（按类型加前缀）、`requireExported`、`notes`。
 - 无法结构化的条款（`_Window`/`_MiniWindow`/… 九种后缀的类名与 UIType、`m_` + name 的字段规则、子控件前缀表、扩展保留名、Controller 页名、包内目录布局、`fill`/`Common`/`Dynamic` 图集、发布勾选项、代码生成流程）写在 `notes`，同时进入 `fairyui_guide`。
-- 查看：`fairyui_conventions`（action=`show`，返回 `source: project | default`）。
+- 查看：`fairyui_conventions`（action=`show`，返回 `source: project | custom | bundled-default`）。
 - 覆盖：`fairyui_conventions`（action=`save`，`rules` 只需写要覆盖的字段，`sourceText` 存原文）。
-- 生效：`fairyui_build` 校验组件名/节点名、按 `packageRules`/`defaultPackage` 选包、按 `folder`/`componentFolder` 落盘、按前缀重命名节点、决定 `exported`；`ignoreConventions: true` 可单次绕过。
-- 检查：`fairyui_lint` 按生效规范报告包/组件/图片命名违规；只有在规范配置了 `componentFolder`/`templateFolder` 时才额外报告「元件留在包根」的目录违规。
+- 规范来源**永远显式**：`fairyui_build` / `fairyui_lint` 返回 `conventions:{source, path}`；用内置默认规范时 `source = "bundled-default"`，且 `warnings[0]` 固定为「⚠️ 正在使用内置默认规范（未找到 <工程>/design/conventions.json）…」——此时命名检查结果不可信，不再静默回退。
+- `conventionsPath`（build/lint）：指向任意路径的 `conventions.json` 正本，优先级 入参 > 工程 `design/` > 内置。
+- 生效：`fairyui_build` 校验组件名/节点名、按 `packageRules`/`defaultPackage` 选包、按 `folder`/`componentFolder` 落盘、按前缀重命名节点、决定 `exported`；`ignoreConventions: true` 可单次绕过。扩展保留名（`icon`/`title`/`bar`…）不会被前缀重命名，也不报节点命名违规。
+- 检查：`fairyui_lint` 按生效规范报告包/组件/图片命名违规；`folder` 只看某个子目录，`components` 只校验指定元件；只有在规范配置了 `componentFolder`/`templateFolder` 时才额外报告「元件留在包根」的目录违规。
 - 新建包：`fairyui_package_create`，包名同样受 `packageNamePattern` 约束，并预建规范里配置的 `Images`/`Widgets`/`Panels` 目录（本规范未配置，因此不建子目录）。
 
 ## 典型流程
@@ -147,7 +171,9 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 2. `fairyui_guide`/`fairyui_inspect` 确认组件类型映射、模板与现有规范。
 3. 用户上传规范文档时，解析为 rules 并 `fairyui_conventions` 保存。
 4. `fairyui_build` 生成并出预览；`read_image` 对比示意图，修正后再次 build。
-5. `fairyui_lint` 自查命名；`fairyui_open` 在编辑器复核/发布。
+5. 覆盖已有组件出现 `indexChanged` 时，用 `fairyui_sync_views` 重生成视图类，再用 `fairyui_check_views` 确认一致。
+6. `fairyui_overlay` 把组件框叠到示意图上，逐像素核对。
+7. `fairyui_lint` 自查命名；`fairyui_open` 在编辑器复核/发布。
 
 ## 安装（换电脑 / 分发）
 
@@ -212,7 +238,7 @@ FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每�
 
 ## 限制
 
-- 预览是 GDI+ 近似渲染：列表、装载器、按钮/组件实例画成占位框，富文本只显示纯文本，九宫格图片按整图拉伸；最终效果以编辑器/运行库为准。
+- 预览是 GDI+ 近似渲染：列表/树仍画占位框，按钮/组件实例会递归展开成图片/文本/图形（跨包同样展开，解析不了时退回占位框），富文本只显示纯文本，九宫格图片按整图拉伸；最终效果以编辑器/运行库为准。
 - 自动创建的扩展模板是最小结构（单态按钮、纯图形进度条/滑动条），不含多态 `gear`、控制器联动、动效；需要精细交互时在编辑器里完善。
 - 自动生成的 ComboBox 弹出列表、窗口与树都是基础样式，实际项目可替换为美术模板；ScrollBar 不自动生成。
 - 需要 Windows（PowerShell + GDI+，FairyGUI 编辑器本身也是 Windows 程序）。

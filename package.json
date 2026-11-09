@@ -1,9 +1,9 @@
 {
   "name": "dsh-fairyui",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "FairyGUI UI builder tools for DeepSeek Harness: inspect projects and assets, build components from a layout spec, render previews, open the editor.",
+  "description": "FairyGUI UI builder tools for DeepSeek Harness: inspect projects and assets, build components from a layout spec with controller-page previews, generate and verify C# view classes, overlay layout boxes on mockups, open the editor.",
   "exports": {
     ".": "./index.js",
     "./locale/*.json": "./locale/*.json",
