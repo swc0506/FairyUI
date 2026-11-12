@@ -56,6 +56,16 @@ export const inject = ['tools'];
 const DEFAULT_EDITOR = 'D:\\FairyGUI\\FairyGUI-Editor.exe';
 const DEFAULT_WIDTH = 1136;
 const DEFAULT_HEIGHT = 640;
+// Bundled usage manual registered as a DSH runtime skill (skills/fairygui.md).
+const SKILL_PATH = path.join(import.meta.dirname, 'skills', 'fairygui.md');
+
+function readSkillBody() {
+  try {
+    return fs.readFileSync(SKILL_PATH, 'utf8');
+  } catch {
+    return '';
+  }
+}
 
 const GUIDE_MARKDOWN = `# FairyGUI 组件识别与拼装参考
 
@@ -446,6 +456,25 @@ const layoutParam = {
 
 export function apply(ctx, config) {
   const cfg = config && typeof config === 'object' ? config : {};
+
+  // Optional: expose the bundled FairyGUI manual as a runtime skill. Registered into the
+  // global layer (this is a host bundle) and disposed with the plugin fiber.
+  const skillBody = readSkillBody();
+  const skills = ctx.get('skills');
+  if (skills && skillBody.trim() !== '') {
+    ctx.effect(() =>
+      skills.register({
+        name: 'fairygui',
+        description:
+          'FairyGUI 编辑器与 XML 制作手册：控件/控制器/列表/树/窗口/弹窗/拖放/动效/适配/多语言/发布与代码生成，配合 fairyui_* 工具拼装界面。',
+        whenToUse:
+          '需要制作或修改 FairyGUI 界面（面板、Feed、弹窗、列表项、按钮/进度条/下拉框模板），或需要弄清编辑器属性、package.xml/组件 XML 结构、发布设置与视图类生成时。',
+        source: 'bundled',
+        invocation: { modelInvocable: true, userInvocable: true },
+        content: skillBody,
+      }),
+    );
+  }
 
   ctx.tools.register({
     name: 'fairyui_inspect',

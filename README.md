@@ -4,6 +4,12 @@ DSH Host 插件：让 Agent 看懂 UI 示意图里的组件类型，按工程规
 
 FairyGUI 工程是纯 XML：`<工程>.fairy` + `assets/<包>/package.xml` + 每个元件一个 XML。插件直接读写这套格式，不要求编辑器常开。
 
+## 内置 Skill
+
+插件随包附带 `skills/fairygui.md`，在 `apply()` 里通过 `ctx.skills.register(...)` 注册为运行期 skill **`fairygui`**（DSH 支持时；不支持则静默跳过）。内容整理自 FairyGUI 官方编辑器文档（39 页）与 FairyGUI-unity 官方案例（30 个示例 + UIProject XML），覆盖控件、扩展组件、控制器/齿轮、关联、列表/树/滚动容器、窗口/弹窗/拖放、动效/适配/多语言、发布与代码生成，以及“名字即契约”的运行时结构要求。
+
+装好插件后直接对 Agent 说“按 fairygui skill 做这个界面”，或让它调用 `skill` 工具加载 `fairygui`。
+
 ## 工具
 
 | 工具 | 用途 |

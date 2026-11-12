@@ -1,6 +1,6 @@
 {
   "name": "dsh-fairyui",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "description": "FairyGUI UI builder tools for DeepSeek Harness: inspect projects and assets, build components from a layout spec with controller-page previews, generate and verify C# view classes, overlay layout boxes on mockups, and enhance mockup reading with OCR/crop/annotate/palette/diff, open the editor.",
@@ -24,6 +24,7 @@
     "lib/*.ps1",
     "defaults/*.json",
     "defaults/*.md",
+    "skills/*.md",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
